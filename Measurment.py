@@ -164,7 +164,6 @@ def decay_rate(
     slopes_matrix[u_indices, v_indices] = torch.tensor(slopes, device=device, dtype=torch.float32)
 
     slopes_matrix = torch.round(slopes_matrix, decimals=2)
-    # slopes_matrix = -1 * slopes_matrix  # Convert slopes to decay rates
 
     decay_rates = slopes_matrix[~torch.isnan(slopes_matrix)].tolist()
     decay_rates_with_nan = slopes_matrix.flatten().tolist()
