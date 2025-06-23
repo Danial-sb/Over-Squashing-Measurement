@@ -4,9 +4,9 @@ from attrdict import AttrDict
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', type=str, default="IMDB-BINARY", help='Dataset name')
+    parser.add_argument('--dataset', type=str, default="MUTAG", help='Dataset name')
     parser.add_argument('--layer_type', type=str, default='GIN', help='Layer type')
-    parser.add_argument('--rewiring', type=str, default='digl', choices=["rw", "none", "sdrf", "digl", "fosr", "borf"], help='type of rewiring to be performed'),
+    parser.add_argument('--rewiring', type=str, default='fosr', choices=["rw", "none", "sdrf", "digl", "fosr", "borf"], help='type of rewiring to be performed'),
     parser.add_argument('--hidden_layers', type=int, nargs='+', default=[64, 64, 64], help='Hidden layers')
     parser.add_argument('--dropout', type=float, default=0.5, help='Dropout rate')
 

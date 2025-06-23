@@ -3,14 +3,158 @@ from torch import Tensor
 from torch_geometric.utils import to_dense_adj
 import networkx as nx
 from torch_geometric.utils import to_networkx
-from torch_geometric.data import Data
+from typing import List
 import random
 import math
+import tqdm
+from args import get_args
+from typing import Any, Union
+import os.path as osp
+from torch_geometric.datasets import TUDataset, LRGBDataset
+from torch_geometric.utils import degree
+from torch_geometric.utils import add_self_loops
+import torch_geometric.transforms as T
+import logging
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
-from numba import jit
 
+class CustomTransform(object):
+    def __call__(self, data):
+        if data.x is None:  # Only set features if they don't exist
+            data.x = torch.ones((data.num_nodes, 1), dtype=torch.float32)
+        return data
+
+
+class AddSelfLoopsTransform(object):
+    def __call__(self, data):
+        data.edge_index, _ = add_self_loops(data.edge_index, num_nodes=data.num_nodes)
+        return data
+
+def get_dataset(args: Any) -> Union[TUDataset, LRGBDataset]:
+    """
+    Load the specified dataset.
+
+    Parameters:
+    dataset_name (str): Name of the dataset.
+
+    Returns:
+    torch_geometric.datasets.Dataset: Loaded dataset.
+    """
+    path = osp.join(osp.dirname(osp.realpath(__file__)), 'data', args.dataset)
+
+    if args.dataset in ['MUTAG', 'PROTEINS', 'DD', 'ENZYMES']:
+        return TUDataset(path, name=args.dataset, transform=AddSelfLoopsTransform())
+    elif args.dataset in ['IMDB-BINARY', 'IMDB-MULTI', 'REDDIT-BINARY', 'COLLAB']:
+        return TUDataset(path, name=args.dataset, transform=T.Compose([CustomTransform(), AddSelfLoopsTransform()]))
+    elif args.dataset in ['Peptides-func', 'PCQM-Contact', 'Peptides-struct']:
+        return LRGBDataset(path, name=args.dataset, transform=AddSelfLoopsTransform())
+    else:
+        raise ValueError(f"Unsupported dataset: {args.dataset}")
+
+def dataset_statistics():
+    args = get_args()
+    dataset = get_dataset(args)
+
+    num_nodes_list = []
+    degree_list = []
+    diameter_list = []
+    num_edges_list = []
+    density_list = []
+    counter_of_connected = 0
+    for data in tqdm(dataset, desc='Processing', total=len(dataset)):
+        num_nodes = data.num_nodes
+        num_edges = data.edge_index.shape[1] // 2
+        max_deg = degree(data.edge_index[0], num_nodes, dtype=torch.long).max()
+        diameter = compute_diameter(data)
+        num_nodes_list.append(num_nodes)
+        num_edges_list.append(num_edges)
+        degree_list.append(max_deg)
+
+        # --- density for this graph ---------------------------------------------
+        if num_nodes > 1:
+            density = 2.0 * num_edges / (num_nodes * (num_nodes - 1))
+        else:                              # isolated single-node graph
+            density = 0.0
+        density_list.append(density)
+
+        if diameter != float('inf'):
+            counter_of_connected += 1
+            diameter_list.append(diameter)
+
+    mean_deg = torch.tensor(degree_list).float().mean()
+    max_deg = torch.tensor(degree_list).max()
+    min_deg = torch.tensor(degree_list).min()
+    print(f'Mean Degree: {mean_deg}')
+    print(f'Max Degree: {max_deg}')
+    print(f'Min Degree: {min_deg}')
+
+    mean_num_nodes = torch.tensor(num_nodes_list).float().mean().round().long().item()
+    max_num_nodes = torch.tensor(num_nodes_list).float().max().round().long().item()
+    min_num_nodes = torch.tensor(num_nodes_list).float().min().round().long().item()
+    print(f'Mean number of nodes: {mean_num_nodes}')
+    print(f'Max number of nodes: {max_num_nodes}')
+    print(f'Min number of nodes: {min_num_nodes}')
+    print(f'Number of graphs: {len(dataset)}')
+
+    mean_num_edges = torch.tensor(num_edges_list).float().mean().round().long().item()
+    max_num_edges = torch.tensor(num_edges_list).float().max().round().long().item()
+    min_num_edges = torch.tensor(num_edges_list).float().min().round().long().item()
+
+    print(f'Mean number of edges: {mean_num_edges}')
+    print(f'Max number of edges: {max_num_edges}')
+    print(f'Min number of edges: {min_num_edges}')
+
+    mean_diameter = torch.tensor(diameter_list).float().mean().item()
+    max_diameter = torch.tensor(diameter_list).float().max().long().item()
+    min_diameter = torch.tensor(diameter_list).float().min().long().item()
+
+    print(f'Mean diameter: {mean_diameter}')
+    print(f'Max diameter: {max_diameter}')
+    print(f'Min diameter: {min_diameter}')
+
+    # === NEW: dataset-level density summary ====================================
+    mean_density = torch.tensor(density_list).float().mean().item()
+    max_density  = torch.tensor(density_list).max().item()
+    min_density  = torch.tensor(density_list).min().item()
+
+    print(f'Mean density: {mean_density:.4f}')
+    print(f'Max  density: {max_density:.4f}')
+    print(f'Min  density: {min_density:.4f}')
+
+    print(f'Number of graphs: {len(dataset)}')
+    print(f'Number of disconnected graphs: {len(dataset) - counter_of_connected}')
+
+def num_connected_components(data):
+    g = to_networkx(data, to_undirected=True)
+    return nx.number_connected_components(g)
+
+def average_connected_components():
+    args = get_args()
+    dataset = get_dataset(args)
+
+    total_components = 0
+    for data in tqdm(dataset, desc='Counting components'):
+        total_components += num_connected_components(data)
+
+    avg_components = total_components / len(dataset)
+    print(f"Average number of connected components: {avg_components}")
+
+def plot_histogram(decay_rates: List[float], filename: str) -> None:
+    """
+    Plot and save a histogram of the decay rates.
+
+    Parameters:
+    decay_rates (List[float]): List of decay slopes.
+    filename (str): Filename to save the plot.
+    """
+    plt.figure()
+    plt.hist(decay_rates, bins=20, edgecolor='black')
+    plt.title('Distribution of Decay Slopes')
+    plt.xlabel('Slope (-Decay Rate)')
+    plt.ylabel('Frequency')
+    plt.savefig(filename)
+    print(f"Histogram saved as {filename}")
 
 def get_adj(edge_index: Tensor, set_diag: bool = True, symmetric_normalize: bool = True, device='cpu') -> Tensor:
     """
@@ -43,7 +187,6 @@ def setup_logging(log_file):
     log_format = '%(asctime)s - %(message)s'
     logging.basicConfig(level=logging.INFO, format=log_format,
                         handlers=[logging.FileHandler(log_file), logging.StreamHandler()])
-
 
 def log_message(message):
     logging.info(message)
@@ -170,28 +313,6 @@ def gnm_random_graph_v2(m, seed=None, directed=False, n=None, graph=None):
     # Return as PyG Data object
     # return Data(x=graph.x, edge_index=edge_index, edge_type=edge_type, y=graph.y, num_nodes=n)
     return edge_index, edge_type, graph.x, graph.y, n # remember to fix
-
-def calculate_target_probability(diameter: int):
-    max_prob = 0.99
-    # min_prob = 0.01
-    beta = 0.25
-
-    target_probability = max_prob * (1 - math.exp(-beta * (diameter - 1)))
-
-    return target_probability
-
-def calculate_num_random_edges(dataset, diameter: int, n: int):
-    binomial_d = math.comb(diameter, 2)
-    binomial_n = math.comb(n, 2)
-
-    existing_edges = (dataset.edge_index.shape[1] - dataset.num_nodes) // 2
-    target_probability = calculate_target_probability(diameter)
-
-    P = binomial_d / (binomial_n - existing_edges)
-    k = np.log(1 - target_probability) / np.log(1 - P) # TODO Debug why we get division by zero
-
-    return math.ceil(k)
-
 
 # @jit(nopython=True)
 def dirichlet_energy(X, edge_index):
