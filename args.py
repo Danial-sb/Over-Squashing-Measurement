@@ -2,49 +2,160 @@ import argparse
 from attrdict import AttrDict
 
 
-def get_args():
+def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', type=str, default="MUTAG", help='Dataset name')
-    parser.add_argument('--layer_type', type=str, default='GIN', help='Layer type')
-    parser.add_argument('--rewiring', type=str, default='fosr', choices=["rw", "none", "sdrf", "digl", "fosr", "borf"], help='type of rewiring to be performed'),
-    parser.add_argument('--hidden_layers', type=int, nargs='+', default=[64, 64, 64], help='Hidden layers')
-    parser.add_argument('--dropout', type=float, default=0.5, help='Dropout rate')
+    parser.add_argument('--layer_type', type=str, default='R-GCN', help='Layer type')
+    parser.add_argument('--rewiring', type=str, default='digl',
+                        choices=["sdrf", "digl", "fosr", "borf"], help='Type of rewiring method')
 
-    parser.add_argument('--cuda_device', type=int, default=2, help="CUDA device to use e.g. 0")
-    parser.add_argument('--train_fraction', type=float, default=0.8, help='Fraction of training data')
-    parser.add_argument('--validation_fraction', type=float, default=0.1, help='Fraction of validation data')
-    parser.add_argument('--test_fraction', type=float, default=0.1, help='Fraction of test data')
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
-    parser.add_argument('--input_dim', type=int, default=None, help='input dimension')
-    parser.add_argument('--batch_size', type=int, default=16, choices=[16, 32, 64], help='Batch size') # MUTAG:16, ENZYMES:32, PROTEINS:64
-    parser.add_argument('--batch_norm', type=bool, default=False, choices=[True, False], help='Batch normalization')
-    parser.add_argument('--max_epochs', type=int, default=300, help='Maximum Number of epochs')
-    parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate')
-    parser.add_argument('--stopping_criterion', type=str, default='validation', help='Stopping criterion')
-    parser.add_argument('--eval_every', type=int, default=1, help='calculate validation/test accuracy every X epochs')
-    parser.add_argument('--stopping_threshold', type=float, default=1.01, help='Stopping threshold')
-    parser.add_argument('--patience', type=int, default=100, help='Patience')
-    parser.add_argument('--num_relations', type=int, default=2, help='num_relations')
-    parser.add_argument('--num_trials', type=int, default=100, help='Number of trials')
-    parser.add_argument('--display', action='store_true', help='Display print statements')
-    parser.add_argument('--separate_gnns', type=bool, default=False, choices=[True, False], help='Separate GNNs for each relation')
-    parser.add_argument('--last_layer_fa', type=bool, default=False, choices=[True, False], help='Last layer fully adjacent')
-    # DIGL args
-    parser.add_argument('--alpha', type=float, default=0.05, help='alpha hyperparameter for DIGL')
-    parser.add_argument('--k', type=int, default=None, help='k hyperparameter for DIGL')
-    parser.add_argument('--eps', type=float, default=0.001, help='epsilon hyperparameter for DIGL')
-    # BORF args
-    parser.add_argument('--num_iterations', type=int, default=3, help='num_iterations')
-    parser.add_argument('--borf_batch_add', default=30, type=int)
-    parser.add_argument('--borf_batch_remove', default=30, type=int)
-    # wandb
-    parser.add_argument('--wandb', default=True, action='store_true', help="flag if logging to wandb")
-    parser.add_argument('--wandb_sweep', action='store_true',
-                        help="flag if sweeping")  # if not it picks up params in greed_params
-    parser.add_argument('--wandb_entity', default="danial-saber", type=str)
-    parser.add_argument('--wandb_project', default="Random-Wiring-New", type=str)
-    parser.add_argument('--wandb_run_name', default=None, type=str)
-    parser.add_argument('--run_track_reports', action='store_true', help="run_track_reports")
-    parser.add_argument('--save_wandb_reports', action='store_true', help="save_wandb_reports")
+    parser.add_argument('--display', action='store_true', help='Display config info')
+
+    # DIGL
+    parser.add_argument('--alpha', type=float, default=0.05, help='Alpha hyperparameter for DIGL')
+    parser.add_argument('--k', type=int, default=None, help='K hyperparameter for DIGL')
+    parser.add_argument('--eps', type=float, default=0.001, help='Epsilon hyperparameter for DIGL')
+
+    # BORF
+    parser.add_argument('--num_iterations', type=int, default=3, help='Number of iterations for rewiring')
+    parser.add_argument('--borf_batch_add', type=int, default=30, help='BORF batch add size')
+    parser.add_argument('--borf_batch_remove', type=int, default=30, help='BORF batch remove size')
+
     args = parser.parse_args()
-    return AttrDict(vars(args))
+    return populate_defaults(args)
+
+
+def get_args():
+    return parse_args()
+
+
+def populate_defaults(args):
+    args = AttrDict(vars(args)) if not isinstance(args, AttrDict) else args
+
+    arch = args.layer_type.upper()
+    dataset = args.dataset.upper()
+
+    args.layer_type = arch
+    args.dataset = dataset
+
+    # -------------------- FoSR --------------------
+    FOSR_NUM_ITERATIONS = {
+        'GCN': {
+            'REDDIT-BINARY': 5, 'IMDB-BINARY': 5, 'MUTAG': 40,
+            'ENZYMES': 10, 'PROTEINS': 20, 'COLLAB': 10,
+            'CORA': 150, 'CITESEER': 100, 'TEXAS': 50,
+            'CORNELL': 125, 'WISCONSIN': 175, 'CHAMELEON': 50
+        },
+        'R-GCN': {
+            'REDDIT-BINARY': 5, 'IMDB-BINARY': 20, 'MUTAG': 40,
+            'ENZYMES': 40, 'PROTEINS': 5, 'COLLAB': 5
+        },
+        'GIN': {
+            'REDDIT-BINARY': 10, 'IMDB-BINARY': 20, 'MUTAG': 20,
+            'ENZYMES': 5, 'PROTEINS': 10, 'COLLAB': 20,
+            'CORA': 50, 'CITESEER': 200, 'TEXAS': 150,
+            'CORNELL': 75, 'WISCONSIN': 25, 'CHAMELEON': 25
+        },
+        'R-GIN': {
+            'REDDIT-BINARY': 40, 'IMDB-BINARY': 20, 'MUTAG': 5,
+            'ENZYMES': 40, 'PROTEINS': 20, 'COLLAB': 10
+        }
+    }
+
+    if args.rewiring == "fosr":
+        args.num_iterations = FOSR_NUM_ITERATIONS.get(arch, {}).get(dataset, args.num_iterations)
+
+    # -------------------- SDRF --------------------
+    SDRF_NUM_ITERATIONS = {
+        'GCN': {
+            'REDDIT-BINARY': 5, 'IMDB-BINARY': 20, 'MUTAG': 5,
+            'ENZYMES': 5, 'PROTEINS': 40, 'COLLAB': 5,
+            'CORA': 12, 'CITESEER': 175, 'TEXAS': 87,
+            'CORNELL': 100, 'WISCONSIN': 25, 'CHAMELEON': 50
+        },
+        'R-GCN': {
+            'REDDIT-BINARY': 40, 'IMDB-BINARY': 5, 'MUTAG': 40,
+            'ENZYMES': 5, 'PROTEINS': 20, 'COLLAB': 20
+        },
+        'GIN': {
+            'REDDIT-BINARY': 5, 'IMDB-BINARY': 10, 'MUTAG': 5,
+            'ENZYMES': 5, 'PROTEINS': 20, 'COLLAB': 40,
+            'CORA': 50, 'CITESEER': 25, 'TEXAS': 37,
+            'CORNELL': 25, 'WISCONSIN': 150, 'CHAMELEON': 87
+        },
+        'R-GIN': {
+            'REDDIT-BINARY': 5, 'IMDB-BINARY': 40, 'MUTAG': 5,
+            'ENZYMES': 5, 'PROTEINS': 5, 'COLLAB': 20
+        }
+    }
+
+    if args.rewiring == "sdrf":
+        args.num_iterations = SDRF_NUM_ITERATIONS.get(arch, {}).get(dataset, args.num_iterations)
+
+    # -------------------- DIGL --------------------
+    DIGL_ALPHA = {
+        'GCN': {'REDDIT-BINARY': 0.15, 'IMDB-BINARY': 0.05, 'MUTAG': 0.15,
+                'ENZYMES': 0.15, 'PROTEINS': 0.15, 'COLLAB': 0.05,
+                'CORA': 0.0773, 'CITESEER': 0.1076, 'TEXAS': 0.0206,
+                'CORNELL': 0.1795, 'WISCONSIN': 0.1246, 'CHAMELEON': 0.0244},
+        'R-GCN': {'REDDIT-BINARY': 0.15, 'IMDB-BINARY': 0.05, 'MUTAG': 0.05,
+                  'ENZYMES': 0.15, 'PROTEINS': 0.05, 'COLLAB': 0.05},
+        'GIN': {'REDDIT-BINARY': 0.05, 'IMDB-BINARY': 0.15, 'MUTAG': 0.05,
+                'ENZYMES': 0.15, 'PROTEINS': 0.15, 'COLLAB': 0.15},
+        'R-GIN': {'REDDIT-BINARY': 0.05, 'IMDB-BINARY': 0.15, 'MUTAG': 0.05,
+                  'ENZYMES': 0.05, 'PROTEINS': 0.05, 'COLLAB': 0.05}
+    }
+
+    DIGL_EPSILON = {
+        'GCN': {'REDDIT-BINARY': 1e-3, 'IMDB-BINARY': 1e-4, 'MUTAG': 1e-3,
+                'ENZYMES': 1e-4, 'PROTEINS': 1e-4, 'COLLAB': 1e-4,
+                'CORA': None, 'CITESEER': 0.0008, 'TEXAS': None,
+                'CORNELL': None, 'WISCONSIN': 0.0001, 'CHAMELEON': None},
+        'R-GCN': {'REDDIT-BINARY': 1e-4, 'IMDB-BINARY': 1e-3, 'MUTAG': 1e-4,
+                  'ENZYMES': 1e-3, 'PROTEINS': 1e-3, 'COLLAB': 1e-3},
+        'GIN': {'REDDIT-BINARY': 1e-3, 'IMDB-BINARY': 1e-4, 'MUTAG': 1e-4,
+                'ENZYMES': 1e-3, 'PROTEINS': 1e-3, 'COLLAB': 1e-4},
+        'R-GIN': {'REDDIT-BINARY': 1e-3, 'IMDB-BINARY': 1e-4, 'MUTAG': 1e-3,
+                  'ENZYMES': 1e-4, 'PROTEINS': 1e-4, 'COLLAB': 1e-3}
+    }
+
+    DIGL_K = {
+        'GCN': {'CORA': 128, 'CITESEER': None, 'TEXAS': 32,
+                'CORNELL': 64, 'WISCONSIN': None, 'CHAMELEON': 64}
+    }
+
+    if args.rewiring == "digl":
+        args.alpha = DIGL_ALPHA.get(arch, {}).get(dataset, args.alpha)
+        args.eps = DIGL_EPSILON.get(arch, {}).get(dataset, args.eps)
+        if arch == 'GCN' and dataset in DIGL_K['GCN']:
+            args.k = DIGL_K['GCN'][dataset]
+
+    # -------------------- BORF --------------------
+    BORF_PARAMS = {
+        'GCN': {
+            'CORA': (3, 20, 10), 'CITESEER': (3, 20, 10),
+            'TEXAS': (3, 30, 10), 'CORNELL': (3, 30, 10),
+            'WISCONSIN': (2, 20, 20), 'CHAMELEON': (3, 20, 20),
+            'ENZYMES': (1, 3, 0), 'IMDB': (1, 3, 0),
+            'MUTAG': (1, 20, 3), 'PROTEINS': (3, 4, 1)
+        },
+        'GIN': {
+            'CORA': (3, 20, 30), 'CITESEER': (3, 20, 30),
+            'TEXAS': (1, 20, 10), 'CORNELL': (1, 20, 10),
+            'WISCONSIN': (2, 50, 30), 'CHAMELEON': (2, 30, 30),
+            'ENZYMES': (2, 3, 1), 'IMDB': (1, 2, 1),
+            'MUTAG': (1, 3, 1), 'PROTEINS': (2, 4, 3)
+        }
+    }
+
+    if args.rewiring == "borf":
+        if arch in BORF_PARAMS and dataset in BORF_PARAMS[arch]:
+            args.num_iterations, args.borf_batch_add, args.borf_batch_remove = BORF_PARAMS[arch][dataset]
+
+    if args.display:
+        print(f"\n[INFO] Final arguments after populating defaults for ({arch}, {dataset}):")
+        for k, v in args.items():
+            print(f"  {k}: {v}")
+
+    return args

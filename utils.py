@@ -18,6 +18,8 @@ import logging
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
+from torch_geometric.data import Data
+from torch_geometric.utils import to_undirected
 
 class CustomTransform(object):
     def __call__(self, data):
@@ -258,6 +260,12 @@ def gnm_random_graph_v2(m, seed=None, directed=False, n=None, graph=None):
         random.seed(seed)
         torch.manual_seed(seed)
 
+    # if graph is not None:
+    #     edge_index = graph.edge_index
+    #     if not directed:
+    #         edge_index = to_undirected(edge_index)
+    #     existing_edges = {tuple(e) for e in edge_index.t().tolist()}
+
     existing_edges = [tuple(edge) for edge in graph.edge_index.T.tolist()] if graph is not None else []
 
     # Initialize edge set
@@ -312,7 +320,10 @@ def gnm_random_graph_v2(m, seed=None, directed=False, n=None, graph=None):
 
     # Return as PyG Data object
     # return Data(x=graph.x, edge_index=edge_index, edge_type=edge_type, y=graph.y, num_nodes=n)
-    return edge_index, edge_type, graph.x, graph.y, n # remember to fix
+    # return edge_index, edge_type, graph.x, graph.y, n # remember to fix
+    x = graph.x if graph is not None else None
+    y = graph.y if graph is not None else None
+    return edge_index, edge_type, x, y, n
 
 # @jit(nopython=True)
 def dirichlet_energy(X, edge_index):
@@ -345,3 +356,71 @@ def generate_qq_plots(decay_rates, path):
     plt.title(f'Q-Q Plot)')
     plt.savefig(path)
     plt.close()
+
+
+
+def _make_dummy_graph():
+    # 4 nodes, undirected triangle (0,1,2) plus isolated 3
+    edge_index = torch.tensor([[0,1,1,2,2,0],
+                               [1,0,2,1,0,2]], dtype=torch.long)
+    x = torch.randn(4, 3)
+    y = torch.tensor([0])
+    return Data(x=x, edge_index=edge_index, y=y)
+
+# -------------------- TESTS ----------------------------
+def test_determinism():
+    e1, t1, *_ = gnm_random_graph_v2(m=5, seed=42, directed=True, n=10)
+    e2, t2, *_ = gnm_random_graph_v2(m=5, seed=42, directed=True, n=10)
+    assert torch.equal(e1, e2) and torch.equal(t1, t2), "Same seed → different graphs!"
+
+def test_variability():
+    e1, *_ = gnm_random_graph_v2(m=5, seed=1, directed=True, n=10)
+    e2, *_ = gnm_random_graph_v2(m=5, seed=2, directed=True, n=10)
+    assert not torch.equal(e1, e2), "Different seeds → identical graphs!"
+
+def test_graph_without_prior_edges():
+    m, n = 6, 8
+    ei, et, *_ = gnm_random_graph_v2(m=m, seed=0, directed=False, n=n)
+    pair_cnt = ei.size(1) // 2   # each undirected edge appears twice
+    assert pair_cnt == m, f"Expected {m} undirected edges, got {pair_cnt}"
+    assert ei.max() < n, "Node index ≥ n"
+    # uniqueness check (unordered pairs)
+    pairs = {tuple(sorted(ei[:, i].tolist())) for i in range(0, ei.size(1), 2)}
+    assert len(pairs) == m, "Duplicate edges generated"
+    # self-loop check
+    assert not any(ei[0] == ei[1]), "Self-loop present"
+
+def test_respects_existing_edges():
+    g = _make_dummy_graph()
+    existing = {tuple(g.edge_index[:, i].tolist()) for i in range(g.edge_index.size(1))}
+    m = 4
+    ei, et, *_ = gnm_random_graph_v2(m=m, seed=0, directed=False, graph=g)
+    new_flags = (et == 1).nonzero().flatten()
+    assert len(new_flags) == m * 2, \
+        "edge_type should flag exactly the new undirected edges (both directions)"
+    # none of the "new" edges should be already in existing
+    for idx in new_flags:
+        assert tuple(ei[:, idx].tolist()) not in existing, "Duplicate added into graph"
+
+def test_overflow_m_is_capped():
+    n = 5
+    max_undirected = n * (n - 1) // 2
+    # we already ask for 3× more than possible
+    ei, _, *_ = gnm_random_graph_v2(m=3 * max_undirected, seed=0, directed=False, n=n)
+    assert ei.size(1) // 2 == max_undirected, "Edge count exceeds theoretical maximum"
+
+def test_assert_raised_without_n_or_graph():
+    try:
+        gnm_random_graph_v2(m=3)     # missing n **and** graph
+    except AssertionError:
+        pass
+    else:
+        assert False, "Expected AssertionError when n and graph are both None"
+
+# -------------------- MAIN -----------------------------
+if __name__ == "__main__":
+    torch.manual_seed(0)  # stability for dummy graph generation
+    tests = [obj for name, obj in globals().items() if name.startswith("test_")]
+    for test in tests:
+        test()            # run
+        print(f"{test.__name__}: ✅")

@@ -7,6 +7,7 @@ from torch_geometric.datasets import WebKB, Planetoid, WikipediaNetwork
 from torch_geometric.utils import to_undirected
 from torch_geometric.transforms import Compose, LargestConnectedComponents
 import torch
+from attrdict import AttrDict
 from utils import *
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -15,7 +16,7 @@ from tqdm import tqdm
 import logging
 import os
 import random
-from args import get_args
+from args import get_args, populate_defaults
 from torch_geometric.datasets import TUDataset
 import os.path as osp
 import numpy as np
@@ -27,14 +28,14 @@ def compute_over_squashing_metrics(decay_rates: List[float], num_nodes) -> Tuple
     Compute over-squashing metrics:
       1. Over-Squashing Prevalence (Y_pre): fraction of node pairs with positive decay rates.
       2. Average Decay Rate (Y_avg): average decay rate over all node pairs.
-      3. Variance of Decay Rates (Y_var): variability of the decay rates.
+      3. std of Decay Rates (Y_std): variability of the decay rates.
       4. Maximum Decay Rate (Y_max): highest observed decay rate.
 
     Parameters:
         decay_rates (List[float]): List of decay rates k_{vu} for each node pair.
 
     Returns:
-        Tuple[float, float, float, float]: (Y_pre, Y_avg, Y_var, Y_max)
+        Tuple[float, float, float, float]: (Y_pre, Y_avg, Y_std, Y_max)
     """
     if not decay_rates:
         return 0.0, 0.0, 0.0, 0.0
@@ -54,25 +55,27 @@ def compute_over_squashing_metrics(decay_rates: List[float], num_nodes) -> Tuple
     # 2. Average decay rate.
     Y_avg = sum(positive_decay_rates) / N
 
-    # 3. Variance of decay rates.
-    Y_var = sum((rate - Y_avg) ** 2 for rate in positive_decay_rates) / N
+    # 3. Std of decay rates.
+    Y_std = (sum((rate - Y_avg) ** 2 for rate in positive_decay_rates) / (N - 1)) ** 0.5 if N > 1 else 0.0
 
     # 4. Maximum decay rate.
     Y_max = max(positive_decay_rates)
 
-    return Y_pre, Y_avg, Y_var, Y_max
+    return Y_pre, Y_avg, Y_std, Y_max
 
-def load_datasets():
+def load_datasets(args):
     combined_transform = Compose([AddSelfLoopsTransform(), CustomTransform()])
-    datasets = {
-        "mutag": list(TUDataset(root="data", name="MUTAG", transform=AddSelfLoopsTransform())),
-        "enzymes": list(TUDataset(root="data", name="ENZYMES", transform=AddSelfLoopsTransform())),
-        "proteins": list(TUDataset(root="data", name="PROTEINS", transform=AddSelfLoopsTransform())),
-        "imdb_binary": list(TUDataset(root="data", name="IMDB-BINARY", transform=combined_transform)),
-        "collab": list(TUDataset(root="data", name="COLLAB", transform=combined_transform)),
-        "reddit_binary": list(TUDataset(root="data", name="REDDIT-BINARY", transform=combined_transform)),
-    }
-    return datasets
+    name = args.dataset.upper()
+
+    if name in {'MUTAG', 'ENZYMES', 'PROTEINS'}:
+        transform = AddSelfLoopsTransform()
+    elif name in {'IMDB-BINARY', 'COLLAB', 'REDDIT-BINARY'}:
+        transform = combined_transform
+    else:
+        raise ValueError(f"Unsupported dataset: {name}")
+
+    dataset = TUDataset(root="data", name=name, transform=transform)
+    return {args.dataset.lower(): list(dataset)}
 
 def apply_rewiring(rewired_dataset: List[Any], rewiring_method: str, args: Any, name: str) -> List[Any]:
     """
@@ -117,14 +120,14 @@ def apply_rewiring(rewired_dataset: List[Any], rewiring_method: str, args: Any, 
 
 def perform_t_tests(pre_list: List[float],
                     ave_list: List[float],
-                    var_list: List[float],
+                    std_list: List[float],
                     max_list = List[float],
                     alpha: float = 0.05) -> Dict[str, Tuple[float, float]]:
     """
     Perform one-sample t-tests on the lists of individual treatment effects (ITEs) for each metric.
 
     Parameters:
-        pre_list, ave_list, var_list, max_list (List[float]): Lists of ITEs.
+        pre_list, ave_list, std_list, max_list (List[float]): Lists of ITEs.
         alpha (float): Overall significance level.
 
     Returns:
@@ -134,7 +137,7 @@ def perform_t_tests(pre_list: List[float],
     tests = {
         'prevalence': pre_list,
         'average': ave_list,
-        'variance': var_list,
+        'std': std_list,
         'max': max_list
     }
     # Bonferroni correction for multiple comparisons.
@@ -160,8 +163,8 @@ def compute_metrics_for_dataset(dataset: List[Any], name: str, args: Any, device
     Returns:
         Tuple: (ITE metric lists, t-test results)
     """
-    ITE_pre_list, ITE_ave_list, ITE_var_list, ITE_max_list = [], [], [], []
-    Y_pre_list, Y_ave_list, Y_var_list, Y_max_list = [], [], [], []
+    ITE_pre_list, ITE_ave_list, ITE_std_list, ITE_max_list = [], [], [], []
+    Y_pre_list, Y_ave_list, Y_std_list, Y_max_list = [], [], [], []
     for idx, data in enumerate(tqdm(dataset, desc="Processing decay rates")):
         # Compute original graph metrics.
         try:
@@ -171,11 +174,11 @@ def compute_metrics_for_dataset(dataset: List[Any], name: str, args: Any, device
             if len(decay_vals) == 0:
                 print(f'No decay rate in graph {idx}')
                 continue
-            Y_pre, Y_avg, Y_var, Y_max = compute_over_squashing_metrics(decay_vals, num_nodes)
+            Y_pre, Y_avg, Y_std, Y_max = compute_over_squashing_metrics(decay_vals, num_nodes)
             if no_rewiring:
                 Y_pre_list.append(Y_pre)
                 Y_ave_list.append(Y_avg)
-                Y_var_list.append(Y_var)
+                Y_std_list.append(Y_std)
                 Y_max_list.append(Y_max)
                 continue
 
@@ -184,70 +187,71 @@ def compute_metrics_for_dataset(dataset: List[Any], name: str, args: Any, device
             rewired_adj = get_adj(rewired_data.edge_index, set_diag=False, symmetric_normalize=False, device=device)
             rewired_diameter = compute_diameter(rewired_data)
             decay_vals_r, _, num_nodes_r = decay_rate(rewired_adj, diameter=rewired_diameter)
-            Y_pre_r, Y_avg_r, Y_var_r, Y_max_r = compute_over_squashing_metrics(decay_vals_r, num_nodes_r)
+            Y_pre_r, Y_avg_r, Y_std_r, Y_max_r = compute_over_squashing_metrics(decay_vals_r, num_nodes_r)
 
             # Compute individual treatment effects (ITEs).
             ITE_pre_list.append(Y_pre_r - Y_pre)
             ITE_ave_list.append(Y_avg_r - Y_avg)
-            ITE_var_list.append(Y_var_r - Y_var)
+            ITE_std_list.append(Y_std_r - Y_std)
             ITE_max_list.append(Y_max_r - Y_max)
         except Exception as e:
             log_message(f"Error processing graph index {idx}: {e}")
             continue
 
     if no_rewiring:
-        return Y_pre_list, Y_ave_list, Y_var_list, Y_max_list
+        return Y_pre_list, Y_ave_list, Y_std_list, Y_max_list
 
-    t_test_results = perform_t_tests(ITE_pre_list, ITE_ave_list, ITE_var_list, ITE_max_list)
-    return (ITE_pre_list, ITE_ave_list, ITE_var_list, ITE_max_list), t_test_results
+    t_test_results = perform_t_tests(ITE_pre_list, ITE_ave_list, ITE_std_list, ITE_max_list)
+    return (ITE_pre_list, ITE_ave_list, ITE_std_list, ITE_max_list), t_test_results
 
 
-def graph_level_average(no_rewiring: bool = False):
+def graph_level_average(no_rewiring: bool = False, args_override: Any = None):
     """
     Computes and logs graph-level over-squashing metrics or treatment effects across multiple datasets.
 
     Depending on the `no_rewiring` flag, this function either:
-    - Computes the baseline over-squashing metrics (prevalence, average, variance, and maximum) on the original graphs, or
+    - Computes the baseline over-squashing metrics (prevalence, average, STD, and maximum) on the original graphs, or
     - Computes the average treatment effect (ATE) of a specified rewiring method, including statistical tests to assess significance.
 
     Args:
         no_rewiring (bool): If True, runs the analysis on the original graphs without any rewiring applied.
                             If False, evaluates the impact of rewiring as specified in the command-line arguments.
     """
-    args = get_args()
-    datasets = load_datasets()
-    path = osp.join(osp.dirname(osp.realpath(__file__)), 'decay_rate_logs')
+    args = args_override if args_override is not None else get_args()
+    datasets = load_datasets(args)
+    path = osp.join(osp.dirname(osp.realpath(__file__)), 'decay_rate_graph')
     os.makedirs(path, exist_ok=True)
     device = torch.device('cpu')
 
     for name, dataset in datasets.items():
         setup_logging(f'{path}/{name}_{args.rewiring}_{args.layer_type}.log')
+        # setup_logging(f'{path}/{name}_original.log')
 
         if no_rewiring:
-            Y_pre_list, Y_ave_list, Y_var_list, Y_max_list = compute_metrics_for_dataset(dataset, name, args, device)
+            Y_pre_list, Y_ave_list, Y_std_list, Y_max_list = compute_metrics_for_dataset(dataset, name, args, device)
             Y_pre_mean = torch.mean(torch.tensor(Y_pre_list)).item()
             Y_ave_mean = torch.mean(torch.tensor(Y_ave_list)).item()
-            Y_var_mean = torch.mean(torch.tensor(Y_var_list)).item()
+            Y_std_mean = torch.mean(torch.tensor(Y_std_list)).item()
             Y_max_mean = torch.mean(torch.tensor(Y_max_list)).item()
             log_message(f"Original Graph Stats:")
             log_message(f"Prevalence: {Y_pre_mean}")
             log_message(f"Average: {Y_ave_mean}")
-            log_message(f"Variance: {Y_var_mean}")
+            log_message(f"STD: {Y_std_mean}")
             log_message(f"Maximum: {Y_max_mean}")
         else:
             ite_lists, t_test_results = compute_metrics_for_dataset(dataset, name, args, device)
-            ITE_pre_list, ITE_ave_list, ITE_var_list, ITE_max_list = ite_lists
+            ITE_pre_list, ITE_ave_list, ITE_std_list, ITE_max_list = ite_lists
+
 
             ate_pre = torch.mean(torch.tensor(ITE_pre_list)).item()
             ate_ave = torch.mean(torch.tensor(ITE_ave_list)).item()
-            ate_var = torch.mean(torch.tensor(ITE_var_list)).item()
+            ate_std = torch.mean(torch.tensor(ITE_std_list)).item()
             ate_max = torch.mean(torch.tensor(ITE_max_list)).item()
 
             for metric, (t_stat, p_val, corr_alpha) in t_test_results.items():
-                ate = {'prevalence': ate_pre, 'average': ate_ave, 'variance': ate_var, 'max': ate_max}[metric]
+                ate = {'prevalence': ate_pre, 'average': ate_ave, 'std': ate_std, 'max': ate_max}[metric]
                 significance = 'Significant' if p_val < corr_alpha else 'Not Significant'
                 log_message(f"{metric.capitalize()} ATE: {ate} (t={t_stat:.2f}, p={p_val:.4f}, {significance})")
-
 
 def report_average_added_edges():
     """
@@ -261,7 +265,7 @@ def report_average_added_edges():
     """
 
     args = get_args()
-    datasets = load_datasets()
+    datasets = load_datasets(args)
     path = osp.join(osp.dirname(osp.realpath(__file__)), 'Added_edges')
     os.makedirs(path, exist_ok=True)
 
@@ -344,11 +348,11 @@ def report_average_added_edges_node():
 
 def plot_distributions(args):
     """
-    Plot the distribution of Y_pre, Y_mean, Y_var, and Y_skew with LaTeX-rendered labels.
+    Plot the distribution of Y_pre, Y_mean, Y_std, and Y_skew with LaTeX-rendered labels.
     """
 
     device = torch.device('cpu')
-    datasets = load_datasets()
+    datasets = load_datasets(args)
     sns.set_theme(style="white")
     plt.rcParams['text.usetex'] = True
     plt.rcParams['font.family'] = 'serif'
@@ -358,12 +362,12 @@ def plot_distributions(args):
     plt.figure(figsize=(12, 8))
 
     for name, dataset in datasets.items():
-        Y_pre_list, Y_ave_list, Y_var_list, Y_max_list = compute_metrics_for_dataset(dataset, name, args,
+        Y_pre_list, Y_ave_list, Y_std_list, Y_max_list = compute_metrics_for_dataset(dataset, name, args,
                                                                                       device=device)
         metrics = {
             r"$\mathbf{Y}_{\textbf{pre}}$": Y_pre_list,
             r"$\mathbf{Y}_{\textbf{mean}}$": Y_ave_list,
-            r"$\mathbf{Y}_{\textbf{var}}$": Y_var_list,
+            r"$\mathbf{Y}_{\textbf{std}}$": Y_std_list,
             r"$\mathbf{Y}_{\textbf{max}}$": Y_max_list
         }
         for i, (label, values) in enumerate(metrics.items(), 1):
@@ -382,11 +386,11 @@ def plot_distributions(args):
         plt.show()
         plt.clf()
 
-def node_classification_treatment_effects(rewiring : bool = True):
+def node_classification_treatment_effects(rewiring : bool = True): #TODO: Do automation
     """
     Computes over-squashing metrics and treatment effects for node classification datasets.
 
-    For each dataset, the function logs decay-based metrics (prevalence, average, variance, maximum)
+    For each dataset, the function logs decay-based metrics (prevalence, average, std, maximum)
     on the original graph and, optionally, on its rewired version. It also computes individual
     treatment effects (ITEs) and performs statistical significance tests (t-test, McNemar's test)
     to evaluate rewiring impact.
@@ -430,10 +434,10 @@ def node_classification_treatment_effects(rewiring : bool = True):
 
             # Compute decay rates and over-squashing metrics for the original graph
             decay_rates_original, decay_rates_original_with_nan, num_nodes = decay_rate(adj, diameter=original_diameter)
-            Y_pre_orig, Y_avg_orig, Y_var_orig, Y_max_orig = compute_over_squashing_metrics(decay_rates_original, num_nodes)
+            Y_pre_orig, Y_avg_orig, Y_std_orig, Y_max_orig = compute_over_squashing_metrics(decay_rates_original, num_nodes)
             log_message(f"{name} Original Over-Squashing Prevalence: {Y_pre_orig}")
             log_message(f"{name} Original Average Decay Rate: {Y_avg_orig}")
-            log_message(f"{name} Original Variance of Decay Rates: {Y_var_orig}")
+            log_message(f"{name} Original STD of Decay Rates: {Y_std_orig}")
             log_message(f"{name} Original Maximum Decay Rate: {Y_max_orig}")
             if rewiring:
                 # --------------------
@@ -475,10 +479,10 @@ def node_classification_treatment_effects(rewiring : bool = True):
 
                 # Compute decay rates and over-squashing metrics for the rewired graph
                 decay_rates_rewired, decay_rates_rewired_with_nan, num_nodes = decay_rate(rewired_adj, diameter=rewired_diameter)
-                Y_pre_rew, Y_avg_rew, Y_var_rew, Y_max_rew = compute_over_squashing_metrics(decay_rates_rewired, num_nodes)
+                Y_pre_rew, Y_avg_rew, Y_std_rew, Y_max_rew = compute_over_squashing_metrics(decay_rates_rewired, num_nodes)
                 log_message(f"{name} Rewired Over-Squashing Prevalence: {Y_pre_rew}")
                 log_message(f"{name} Rewired Average Decay Rate: {Y_avg_rew}")
-                log_message(f"{name} Rewired Variance of Decay Rates: {Y_var_rew}")
+                log_message(f"{name} Rewired STD of Decay Rates: {Y_std_rew}")
                 log_message(f"{name} Rewired Maximum Decay Rate: {Y_max_rew}")
 
                 # --------------------
@@ -486,7 +490,7 @@ def node_classification_treatment_effects(rewiring : bool = True):
                 # --------------------
                 ITE_pre = Y_pre_rew - Y_pre_orig
                 ITE_avg = Y_avg_rew - Y_avg_orig
-                ITE_var = Y_var_rew - Y_var_orig
+                ITE_std = Y_std_rew - Y_std_orig
                 ITE_max = Y_max_rew - Y_max_orig
 
                 # --------------------
@@ -537,7 +541,7 @@ def node_classification_treatment_effects(rewiring : bool = True):
                 # Step 5: Log the results with significance indicators
                 log_message(f"{name} ITE Prevalence: {ITE_pre}, p-value: {p_value_pre:.5f} ({sig_pre})")
                 log_message(f"{name} ITE Average: {ITE_avg}, p-value: {p_value_avg:.5f} ({sig_avg})")
-                log_message(f"{name} ITE Variance: {ITE_var}")
+                log_message(f"{name} ITE STD: {ITE_std}")
                 log_message(f"{name} ITE Maximum: {ITE_max}")
                 log_message(f"Number of added edges: {rew_edges - orig_edges}")
 
@@ -546,6 +550,42 @@ def node_classification_treatment_effects(rewiring : bool = True):
             logging.error(f"Error processing {name}: {str(e)}")
             continue
 
+def automated_graph_level_evaluation():
+    # Get initial args just for defaults
+    base_args = get_args()
+
+    datasets = ["REDDIT-BINARY"]
+    gnns = ["GCN", "GIN", 'R-GCN', 'R-GIN']
+    rewirings = ["fosr", "sdrf", "digl", "borf"]
+
+    for dataset in datasets:
+        for gnn in gnns:
+            for rewiring in rewirings:
+                if rewiring == "borf" and gnn in {"R-GCN", "R-GIN"}:
+                    continue
+
+                # Create new args dictionary per run
+                args = AttrDict({
+                    'dataset': dataset,
+                    'layer_type': gnn,
+                    'rewiring': rewiring,
+                    'alpha': base_args.alpha,
+                    'k': base_args.k,
+                    'eps': base_args.eps,
+                    'num_iterations': base_args.num_iterations,
+                    'borf_batch_add': base_args.borf_batch_add,
+                    'borf_batch_remove': base_args.borf_batch_remove,
+                    'seed': base_args.seed,
+                    'display': True
+                })
+
+                # Apply dataset/GNN-specific hyperparameter updates
+                args = populate_defaults(args)
+
+                try:
+                    graph_level_average(no_rewiring=False, args_override=args)
+                except Exception as e:
+                    print(f"Error processing {dataset}-{gnn}-{rewiring}: {e}")
 
 def main():
     args = get_args()
@@ -561,7 +601,7 @@ def main():
     # test_and_plot_toy_datasets(seed)
     # test_and_plot_real_datasets_list()
     # node_classification_datasets()
-    graph_level_average()
+    # graph_level_average()
     # report_average_added_edges()
     # report_average_added_edges_node()
     # dataset_statistics()
@@ -569,6 +609,7 @@ def main():
     # graph_level_average()
     # graph_level_average_toy()
     # check_disconnected_graphs()
+    automated_graph_level_evaluation()
 
 
 if __name__ == "__main__":
