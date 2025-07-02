@@ -90,6 +90,10 @@ def apply_rewiring(rewired_dataset: List[Any], rewiring_method: str, args: Any, 
     Returns:
         List[Any]: The rewired dataset.
     """
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+
     for idx, data in tqdm(enumerate(rewired_dataset), total=len(rewired_dataset), desc="Rewiring"):
         try:
             if rewiring_method == "fosr":
@@ -116,7 +120,6 @@ def apply_rewiring(rewired_dataset: List[Any], rewiring_method: str, args: Any, 
         data.edge_type = torch.as_tensor(edge_type).clone().detach()
 
     return rewired_dataset
-
 
 def perform_t_tests(pre_list: List[float],
                     ave_list: List[float],
@@ -204,7 +207,6 @@ def compute_metrics_for_dataset(dataset: List[Any], name: str, args: Any, device
     t_test_results = perform_t_tests(ITE_pre_list, ITE_ave_list, ITE_std_list, ITE_max_list)
     return (ITE_pre_list, ITE_ave_list, ITE_std_list, ITE_max_list), t_test_results
 
-
 def graph_level_average(no_rewiring: bool = False, args_override: Any = None):
     """
     Computes and logs graph-level over-squashing metrics or treatment effects across multiple datasets.
@@ -219,7 +221,7 @@ def graph_level_average(no_rewiring: bool = False, args_override: Any = None):
     """
     args = args_override if args_override is not None else get_args()
     datasets = load_datasets(args)
-    path = osp.join(osp.dirname(osp.realpath(__file__)), 'decay_rate_graph')
+    path = osp.join(osp.dirname(osp.realpath(__file__)), 'decay_rate_graph_final')
     os.makedirs(path, exist_ok=True)
     device = torch.device('cpu')
 
@@ -252,6 +254,241 @@ def graph_level_average(no_rewiring: bool = False, args_override: Any = None):
                 ate = {'prevalence': ate_pre, 'average': ate_ave, 'std': ate_std, 'max': ate_max}[metric]
                 significance = 'Significant' if p_val < corr_alpha else 'Not Significant'
                 log_message(f"{metric.capitalize()} ATE: {ate} (t={t_stat:.2f}, p={p_val:.4f}, {significance})")
+
+def automated_graph_level_evaluation():
+    # Get initial args just for defaults
+    base_args = get_args()
+
+    datasets = ["COLLAB"]
+    gnns = ['GCN', 'R-GCN', 'GIN', 'R-GIN']
+    rewirings = ["fosr", "sdrf", "digl", "borf"]
+
+    for dataset in datasets:
+        for gnn in gnns:
+            for rewiring in rewirings:
+                if rewiring == "borf" and (gnn in {"R-GCN", "R-GIN"} or dataset in {"COLLAB", "REDDIT-BINARY"}):
+                    continue
+
+                # Create new args dictionary per run
+                args = AttrDict({
+                    'dataset': dataset,
+                    'layer_type': gnn,
+                    'rewiring': rewiring,
+                    'alpha': base_args.alpha,
+                    'k': base_args.k,
+                    'eps': base_args.eps,
+                    'num_iterations': base_args.num_iterations,
+                    'borf_batch_add': base_args.borf_batch_add,
+                    'borf_batch_remove': base_args.borf_batch_remove,
+                    'seed': base_args.seed,
+                    'display': True
+                })
+
+                # Apply dataset/GNN-specific hyperparameter updates
+                args = populate_defaults(args)
+
+                try:
+                    graph_level_average(no_rewiring=False, args_override=args)
+                except Exception as e:
+                    print(f"Error processing {dataset}-{gnn}-{rewiring}: {e}")
+
+def load_node_classification_dataset(name: str, transform=None):
+    """
+    Load a node classification dataset with the given name and transform.
+
+    Args:
+        name (str): Dataset name (lowercase expected: "cora", "texas", etc.)
+        transform (Transform): PyG transform to apply (e.g., LargestConnectedComponents)
+
+    Returns:
+        dataset (torch_geometric.data.InMemoryDataset): Loaded dataset
+    """
+    name = name.lower()
+    if transform is None:
+        transform = LargestConnectedComponents()
+
+    if name in {"cornell", "texas", "wisconsin"}:
+        return WebKB(root="data", name=name.capitalize(), transform=transform)
+    elif name in {"cora", "citeseer"}:
+        return Planetoid(root="data", name=name, transform=transform)
+    elif name == "chameleon":
+        return WikipediaNetwork(root="data", name="chameleon", transform=transform)
+    else:
+        raise ValueError(f"Unsupported node classification dataset: {name}")
+
+def node_classification_treatment_effects(dataset_name: str, dataset, args, rewiring: bool = True):
+    """
+    Node classification treatment effect logic with injected arguments.
+
+    Args:
+        dataset_name (str): name of dataset (e.g., "cora")
+        dataset: the loaded dataset object
+        args (AttrDict): configuration
+        rewiring (bool): whether to apply rewiring
+    """
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    dataset.data.edge_index = to_undirected(dataset.data.edge_index)
+
+    path = osp.join(osp.dirname(osp.realpath(__file__)), 'decay_rate_node_logs')
+    os.makedirs(path, exist_ok=True)
+
+    log_file = f'{path}/{dataset_name}_{args.rewiring}_{args.layer_type}.log'
+    setup_logging(log_file)
+    log_message(f"Processing dataset: {dataset_name} using rewiring method: {args.rewiring} with setting of "
+                f"{args.layer_type}")
+
+    # --------------------
+    # ORIGINAL GRAPH METRICS
+    # --------------------
+    adj = get_adj(dataset.data.edge_index, set_diag=True, symmetric_normalize=False)
+    original_diameter = compute_diameter(dataset.data)
+    log_message(f"{dataset_name} Original Diameter: {original_diameter}")
+
+    # Compute decay rates and over-squashing metrics for the original graph
+    decay_rates_original, decay_rates_original_with_nan, num_nodes = decay_rate(adj, diameter=original_diameter)
+    Y_pre_orig, Y_avg_orig, Y_std_orig, Y_max_orig = compute_over_squashing_metrics(decay_rates_original, num_nodes)
+    log_message(f"{dataset_name} Original Over-Squashing Prevalence: {Y_pre_orig}")
+    log_message(f"{dataset_name} Original Average Decay Rate: {Y_avg_orig}")
+    log_message(f"{dataset_name} Original STD of Decay Rates: {Y_std_orig}")
+    log_message(f"{dataset_name} Original Maximum Decay Rate: {Y_max_orig}")
+    if rewiring:
+        # --------------------
+        # REWIRED GRAPH METRICS
+        # --------------------
+        log_message(f"TESTING rewiring for: {dataset_name} ({args.rewiring})")
+
+        if args.rewiring == "fosr":
+            edge_index, edge_type, _ = fosr.edge_rewire(dataset.data.edge_index.numpy(),
+                                                        num_iterations=args.num_iterations)
+            dataset.data.edge_index = torch.tensor(edge_index)
+            dataset.data.edge_type = torch.tensor(edge_type)
+        elif args.rewiring == "sdrf":
+            dataset.data.edge_index, dataset.data.edge_type = sdrf.sdrf(dataset.data,
+                                                                        loops=args.num_iterations,
+                                                                        remove_edges=False,
+                                                                        is_undirected=True)
+        elif args.rewiring == "digl":
+            dataset.data.edge_index = digl.rewire(dataset.data, alpha=args.alpha, k=args.k, eps=args.eps)
+            m = dataset.data.edge_index.shape[1]
+            dataset.data.edge_type = torch.tensor(np.zeros(m, dtype=np.int64))
+
+        elif args.rewiring == "borf":
+            edge_index, edge_type = borf.borf3(dataset.data, loops=args.num_iterations, remove_edges=True,
+                                               is_undirected=True,
+                                               batch_add=args.borf_batch_add, batch_remove=args.borf_batch_remove,
+                                               dataset_name=dataset_name, graph_index=0)
+            dataset.data.edge_index = edge_index.clone().detach()
+            dataset.data.edge_type = edge_type.clone().detach()
+
+        else:
+            log_message("No rewiring method specified. Skipping rewiring.")
+
+        log_message(f"Processing Rewired Graph: {dataset_name}")
+        rewired_adj = get_adj(dataset.data.edge_index, set_diag=True, symmetric_normalize=False)
+        rewired_diameter = compute_diameter(dataset.data)
+        log_message(f"{dataset_name} Rewired Diameter: {rewired_diameter}")
+
+        # Compute decay rates and over-squashing metrics for the rewired graph
+        decay_rates_rewired, decay_rates_rewired_with_nan, num_nodes = decay_rate(rewired_adj, diameter=rewired_diameter)
+        Y_pre_rew, Y_avg_rew, Y_std_rew, Y_max_rew = compute_over_squashing_metrics(decay_rates_rewired, num_nodes)
+        log_message(f"{dataset_name} Rewired Over-Squashing Prevalence: {Y_pre_rew}")
+        log_message(f"{dataset_name} Rewired Average Decay Rate: {Y_avg_rew}")
+        log_message(f"{dataset_name} Rewired STD of Decay Rates: {Y_std_rew}")
+        log_message(f"{dataset_name} Rewired Maximum Decay Rate: {Y_max_rew}")
+
+        # --------------------
+        # COMPUTE INDIVIDUAL TREATMENT EFFECTS (ITEs)
+        # --------------------
+        ITE_pre = Y_pre_rew - Y_pre_orig
+        ITE_avg = Y_avg_rew - Y_avg_orig
+        ITE_std = Y_std_rew - Y_std_orig
+        ITE_max = Y_max_rew - Y_max_orig
+
+        # --------------------
+        # SIGNIFICANCE TESTING FOR ITEs
+        # --------------------
+        # Convert decay rates to numpy arrays for statistical tests
+        decay_original = np.array(decay_rates_original_with_nan)
+        decay_rewired = np.array(decay_rates_rewired_with_nan)
+
+        valid_idx = ~np.isnan(decay_original) & ~np.isnan(decay_rewired)
+        decay_original = decay_original[valid_idx]
+        decay_rewired = decay_rewired[valid_idx]
+
+        both_positive = (decay_original > 0) & (decay_rewired > 0)
+        decay_orig_pos = decay_original[both_positive]
+        decay_rew_pos = decay_rewired[both_positive]
+
+        eps = 1e-12
+        log_orig = np.log(decay_orig_pos + eps)
+        log_rew = np.log(decay_rew_pos + eps)
+        if len(log_orig) > 0:
+            t_stat, p_value_avg = ttest_rel(log_rew, log_orig)
+        else:
+            print("No valid pairs available for the t-test.")
+
+        # McNemar's test for ITE_pre
+        positive_original = decay_original > 0
+        positive_rewired = decay_rewired > 0
+        only_original_positive = np.sum(positive_original & ~positive_rewired)
+        only_rewired_positive = np.sum(~positive_original & positive_rewired)
+        n12 = only_original_positive
+        n21 = only_rewired_positive
+        if n12 + n21 > 0:
+            stat = (abs(n12 - n21) - 1) ** 2 / (n12 + n21)
+            p_value_pre = 1 - chi2.cdf(stat, 1)
+        else:
+            p_value_pre = 1.0
+
+        # Step 4: Apply Bonferroni correction
+        # Since we're testing two metrics (ITE_avg and ITE_pre), adjust alpha
+        alpha = 0.05
+        alpha_corrected = alpha / 2
+
+        # Determine significance
+        sig_avg = "significant" if p_value_avg < alpha_corrected else "not significant"
+        sig_pre = "significant" if p_value_pre < alpha_corrected else "not significant"
+
+        # Step 5: Log the results with significance indicators
+        log_message(f"{dataset_name} ITE Prevalence: {ITE_pre}, p-value: {p_value_pre:.5f} ({sig_pre})")
+        log_message(f"{dataset_name} ITE Average: {ITE_avg}, p-value: {p_value_avg:.5f} ({sig_avg})")
+        log_message(f"{dataset_name} ITE STD: {ITE_std}")
+        log_message(f"{dataset_name} ITE Maximum: {ITE_max}")
+
+def automated_node_classification_evaluation():
+    base_args = get_args()
+    datasets = ["cornell", "wisconsin", "texas", "chameleon", "cora", "citeseer"]
+    gnns = ["GCN", "GIN"]
+    rewirings = ["digl", "sdrf", "fosr", "borf"]
+
+    for dataset_name in datasets:
+        for gnn in gnns:
+            for rewiring in rewirings:
+                if rewiring == "digl" and gnn in {"GIN"}:
+                    continue
+
+                args = AttrDict({
+                    'dataset': dataset_name,
+                    'layer_type': gnn,
+                    'rewiring': rewiring,
+                    'alpha': base_args.alpha,
+                    'k': base_args.k,
+                    'eps': base_args.eps,
+                    'num_iterations': base_args.num_iterations,
+                    'borf_batch_add': base_args.borf_batch_add,
+                    'borf_batch_remove': base_args.borf_batch_remove,
+                    'seed': base_args.seed,
+                    'display': True
+                })
+                args = populate_defaults(args)
+
+                try:
+                    dataset = load_node_classification_dataset(dataset_name)
+                    node_classification_treatment_effects(dataset_name, dataset, args, rewiring=True)
+                except Exception as e:
+                    print(f"Error in {dataset_name}-{gnn}-{rewiring}: {e}")
 
 def report_average_added_edges():
     """
@@ -346,270 +583,14 @@ def report_average_added_edges_node():
         added_edges = num_rew_edges - num_orig_edges
         log_message(f"{added_edges:.2f} edges added for dataset {name} under rewiring {args.rewiring} and layer type {args.layer_type}")
 
-def plot_distributions(args):
-    """
-    Plot the distribution of Y_pre, Y_mean, Y_std, and Y_skew with LaTeX-rendered labels.
-    """
-
-    device = torch.device('cpu')
-    datasets = load_datasets(args)
-    sns.set_theme(style="white")
-    plt.rcParams['text.usetex'] = True
-    plt.rcParams['font.family'] = 'serif'
-    plt.rcParams['font.serif'] = ['Computer Modern Roman']
-    plt.rcParams['text.latex.preamble'] = r'\usepackage{amsmath}'
-
-    plt.figure(figsize=(12, 8))
-
-    for name, dataset in datasets.items():
-        Y_pre_list, Y_ave_list, Y_std_list, Y_max_list = compute_metrics_for_dataset(dataset, name, args,
-                                                                                      device=device)
-        metrics = {
-            r"$\mathbf{Y}_{\textbf{pre}}$": Y_pre_list,
-            r"$\mathbf{Y}_{\textbf{mean}}$": Y_ave_list,
-            r"$\mathbf{Y}_{\textbf{std}}$": Y_std_list,
-            r"$\mathbf{Y}_{\textbf{max}}$": Y_max_list
-        }
-        for i, (label, values) in enumerate(metrics.items(), 1):
-            plt.subplot(2, 2, i)
-            sns.histplot(values, kde=True, bins=30)
-            plt.xlabel(label, fontsize=14)
-            plt.ylabel(r"\text{Density}", fontsize=14)
-            plt.xticks(fontsize=16)
-            plt.yticks(fontsize=16)
-
-        plt.tight_layout()
-
-        path = osp.join(osp.dirname(osp.realpath(__file__)), 'Y_distributions')
-        os.makedirs(path, exist_ok=True)
-        plt.savefig(f'{path}/{name}.pdf', dpi=300, bbox_inches='tight')
-        plt.show()
-        plt.clf()
-
-def node_classification_treatment_effects(rewiring : bool = True): #TODO: Do automation
-    """
-    Computes over-squashing metrics and treatment effects for node classification datasets.
-
-    For each dataset, the function logs decay-based metrics (prevalence, average, std, maximum)
-    on the original graph and, optionally, on its rewired version. It also computes individual
-    treatment effects (ITEs) and performs statistical significance tests (t-test, McNemar's test)
-    to evaluate rewiring impact.
-
-    Args:
-        rewiring (bool): If True, applies the selected rewiring method before computing treatment effects.
-    """
-
-    largest_cc = LargestConnectedComponents()
-
-    cornell = WebKB(root="data", name="Cornell", transform=largest_cc)
-    wisconsin = WebKB(root="data", name="Wisconsin", transform=largest_cc)
-    texas = WebKB(root="data", name="Texas", transform=largest_cc)
-    chameleon = WikipediaNetwork(root="data", name="chameleon", transform=largest_cc)
-    cora = Planetoid(root="data", name="cora", transform=largest_cc)
-    citeseer = Planetoid(root="data", name="citeseer", transform=largest_cc)
-    datasets = {"cornell": cornell, "wisconsin": wisconsin, "texas": texas, "chameleon": chameleon, "cora": cora,
-                "citeseer": citeseer}
-
-    for name, dataset in datasets.items():
-        dataset.data.edge_index = to_undirected(dataset.data.edge_index)
-
-    args = get_args()
-    path = osp.join(osp.dirname(osp.realpath(__file__)), 'node_classification_logs')
-    os.makedirs(path, exist_ok=True)
-
-    for name, dataset in datasets.items():
-        try:
-            log_file = f'{path}/{name}_{args.rewiring}_{args.layer_type}.log'
-            setup_logging(log_file)
-            log_message(f"Processing dataset: {name} using rewiring method: {args.rewiring} with setting of "
-                        f"{args.layer_type}")
-
-            # --------------------
-            # ORIGINAL GRAPH METRICS
-            # --------------------
-            adj = get_adj(dataset.data.edge_index, set_diag=True, symmetric_normalize=False)
-            original_diameter = compute_diameter(dataset.data)
-            orig_edges = dataset.data.edge_index.size(1) // 2
-            log_message(f"{name} Original Diameter: {original_diameter}")
-
-            # Compute decay rates and over-squashing metrics for the original graph
-            decay_rates_original, decay_rates_original_with_nan, num_nodes = decay_rate(adj, diameter=original_diameter)
-            Y_pre_orig, Y_avg_orig, Y_std_orig, Y_max_orig = compute_over_squashing_metrics(decay_rates_original, num_nodes)
-            log_message(f"{name} Original Over-Squashing Prevalence: {Y_pre_orig}")
-            log_message(f"{name} Original Average Decay Rate: {Y_avg_orig}")
-            log_message(f"{name} Original STD of Decay Rates: {Y_std_orig}")
-            log_message(f"{name} Original Maximum Decay Rate: {Y_max_orig}")
-            if rewiring:
-                # --------------------
-                # REWIRED GRAPH METRICS
-                # --------------------
-                log_message(f"TESTING rewiring for: {name} ({args.rewiring})")
-
-                if args.rewiring == "fosr":
-                    edge_index, edge_type, _ = fosr.edge_rewire(dataset.data.edge_index.numpy(),
-                                                                num_iterations=args.num_iterations)
-                    dataset.data.edge_index = torch.tensor(edge_index)
-                    dataset.data.edge_type = torch.tensor(edge_type)
-                elif args.rewiring == "sdrf":
-                    dataset.data.edge_index, dataset.data.edge_type = sdrf.sdrf(dataset.data,
-                                                                                loops=args.num_iterations,
-                                                                                remove_edges=False,
-                                                                                is_undirected=True)
-                elif args.rewiring == "digl":
-                    dataset.data.edge_index = digl.rewire(dataset.data, alpha=args.alpha, k=args.k, eps=args.eps)
-                    m = dataset.data.edge_index.shape[1]
-                    dataset.data.edge_type = torch.tensor(np.zeros(m, dtype=np.int64))
-
-                elif args.rewiring == "borf":
-                    edge_index, edge_type = borf.borf3(dataset.data, loops=args.num_iterations, remove_edges=True,
-                                                       is_undirected=True,
-                                                       batch_add=args.borf_batch_add, batch_remove=args.borf_batch_remove,
-                                                       dataset_name=name, graph_index=0)
-                    dataset.data.edge_index = edge_index.clone().detach()
-                    dataset.data.edge_type = edge_type.clone().detach()
-
-                else:
-                    log_message("No rewiring method specified. Skipping rewiring.")
-
-                log_message(f"Processing Rewired Graph: {name}")
-                rewired_adj = get_adj(dataset.data.edge_index, set_diag=True, symmetric_normalize=False)
-                rewired_diameter = compute_diameter(dataset.data)
-                rew_edges = dataset.data.edge_index.size(1) // 2
-                log_message(f"{name} Rewired Diameter: {rewired_diameter}")
-
-                # Compute decay rates and over-squashing metrics for the rewired graph
-                decay_rates_rewired, decay_rates_rewired_with_nan, num_nodes = decay_rate(rewired_adj, diameter=rewired_diameter)
-                Y_pre_rew, Y_avg_rew, Y_std_rew, Y_max_rew = compute_over_squashing_metrics(decay_rates_rewired, num_nodes)
-                log_message(f"{name} Rewired Over-Squashing Prevalence: {Y_pre_rew}")
-                log_message(f"{name} Rewired Average Decay Rate: {Y_avg_rew}")
-                log_message(f"{name} Rewired STD of Decay Rates: {Y_std_rew}")
-                log_message(f"{name} Rewired Maximum Decay Rate: {Y_max_rew}")
-
-                # --------------------
-                # COMPUTE INDIVIDUAL TREATMENT EFFECTS (ITEs)
-                # --------------------
-                ITE_pre = Y_pre_rew - Y_pre_orig
-                ITE_avg = Y_avg_rew - Y_avg_orig
-                ITE_std = Y_std_rew - Y_std_orig
-                ITE_max = Y_max_rew - Y_max_orig
-
-                # --------------------
-                # SIGNIFICANCE TESTING FOR ITEs
-                # --------------------
-                # Convert decay rates to numpy arrays for statistical tests
-                decay_original = np.array(decay_rates_original_with_nan)
-                decay_rewired = np.array(decay_rates_rewired_with_nan)
-
-                valid_idx = ~np.isnan(decay_original) & ~np.isnan(decay_rewired)
-                decay_original = decay_original[valid_idx]
-                decay_rewired = decay_rewired[valid_idx]
-
-                both_positive = (decay_original > 0) & (decay_rewired > 0)
-                decay_orig_pos = decay_original[both_positive]
-                decay_rew_pos = decay_rewired[both_positive]
-
-                eps = 1e-12
-                log_orig = np.log(decay_orig_pos + eps)
-                log_rew = np.log(decay_rew_pos + eps)
-                if len(log_orig) > 0:
-                    t_stat, p_value_avg = ttest_rel(log_rew, log_orig)
-                else:
-                    print("No valid pairs available for the t-test.")
-
-                # McNemar's test for ITE_pre
-                positive_original = decay_original > 0
-                positive_rewired = decay_rewired > 0
-                only_original_positive = np.sum(positive_original & ~positive_rewired)
-                only_rewired_positive = np.sum(~positive_original & positive_rewired)
-                n12 = only_original_positive
-                n21 = only_rewired_positive
-                if n12 + n21 > 0:
-                    stat = (abs(n12 - n21) - 1) ** 2 / (n12 + n21)
-                    p_value_pre = 1 - chi2.cdf(stat, 1)
-                else:
-                    p_value_pre = 1.0
-
-                # Step 4: Apply Bonferroni correction
-                # Since we're testing two metrics (ITE_avg and ITE_pre), adjust alpha
-                alpha = 0.05
-                alpha_corrected = alpha / 2  # 0.025
-
-                # Determine significance
-                sig_avg = "significant" if p_value_avg < alpha_corrected else "not significant"
-                sig_pre = "significant" if p_value_pre < alpha_corrected else "not significant"
-
-                # Step 5: Log the results with significance indicators
-                log_message(f"{name} ITE Prevalence: {ITE_pre}, p-value: {p_value_pre:.5f} ({sig_pre})")
-                log_message(f"{name} ITE Average: {ITE_avg}, p-value: {p_value_avg:.5f} ({sig_avg})")
-                log_message(f"{name} ITE STD: {ITE_std}")
-                log_message(f"{name} ITE Maximum: {ITE_max}")
-                log_message(f"Number of added edges: {rew_edges - orig_edges}")
-
-
-        except Exception as e:
-            logging.error(f"Error processing {name}: {str(e)}")
-            continue
-
-def automated_graph_level_evaluation():
-    # Get initial args just for defaults
-    base_args = get_args()
-
-    datasets = ["REDDIT-BINARY"]
-    gnns = ["GCN", "GIN", 'R-GCN', 'R-GIN']
-    rewirings = ["fosr", "sdrf", "digl", "borf"]
-
-    for dataset in datasets:
-        for gnn in gnns:
-            for rewiring in rewirings:
-                if rewiring == "borf" and gnn in {"R-GCN", "R-GIN"}:
-                    continue
-
-                # Create new args dictionary per run
-                args = AttrDict({
-                    'dataset': dataset,
-                    'layer_type': gnn,
-                    'rewiring': rewiring,
-                    'alpha': base_args.alpha,
-                    'k': base_args.k,
-                    'eps': base_args.eps,
-                    'num_iterations': base_args.num_iterations,
-                    'borf_batch_add': base_args.borf_batch_add,
-                    'borf_batch_remove': base_args.borf_batch_remove,
-                    'seed': base_args.seed,
-                    'display': True
-                })
-
-                # Apply dataset/GNN-specific hyperparameter updates
-                args = populate_defaults(args)
-
-                try:
-                    graph_level_average(no_rewiring=False, args_override=args)
-                except Exception as e:
-                    print(f"Error processing {dataset}-{gnn}-{rewiring}: {e}")
-
 def main():
     args = get_args()
     seed = args.seed
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
-    # path = osp.join(osp.dirname(osp.realpath(__file__)), 'decay_rate_logs')
-    # if not osp.exists(path):
-    #     os.makedirs(path)
-    # log_file = f'{path}/{args.dataset}/{args.rewiring}/{args.layer_type}.log'
-    # setup_logging(log_file)
-    # test_and_plot_toy_datasets(seed)
-    # test_and_plot_real_datasets_list()
-    # node_classification_datasets()
-    # graph_level_average()
-    # report_average_added_edges()
-    # report_average_added_edges_node()
-    # dataset_statistics()
-    # plot_distributions(args)
-    # graph_level_average()
-    # graph_level_average_toy()
-    # check_disconnected_graphs()
     automated_graph_level_evaluation()
+    # automated_node_classification_evaluation()
 
 
 if __name__ == "__main__":

@@ -135,16 +135,16 @@ def populate_defaults(args):
     BORF_PARAMS = {
         'GCN': {
             'CORA': (3, 20, 10), 'CITESEER': (3, 20, 10),
-            'TEXAS': (3, 30, 10), 'CORNELL': (3, 30, 10),
-            'WISCONSIN': (2, 20, 20), 'CHAMELEON': (3, 20, 20),
-            'ENZYMES': (1, 3, 0), 'IMDB': (1, 3, 0),
+            'TEXAS': (3, 30, 10), 'CORNELL': (3, 20, 30),
+            'WISCONSIN': (2, 30, 20), 'CHAMELEON': (3, 20, 20),
+            'ENZYMES': (1, 3, 2), 'IMDB': (1, 3, 0),
             'MUTAG': (1, 20, 3), 'PROTEINS': (3, 4, 1)
         },
         'GIN': {
-            'CORA': (3, 20, 30), 'CITESEER': (3, 20, 30),
-            'TEXAS': (1, 20, 10), 'CORNELL': (1, 20, 10),
-            'WISCONSIN': (2, 50, 30), 'CHAMELEON': (2, 30, 30),
-            'ENZYMES': (2, 3, 1), 'IMDB': (1, 2, 1),
+            'CORA': (3, 20, 30), 'CITESEER': (3, 10, 20),
+            'TEXAS': (1, 20, 10), 'CORNELL': (3, 10, 20),
+            'WISCONSIN': (2, 50, 30), 'CHAMELEON': (3, 30, 30),
+            'ENZYMES': (3, 3, 1), 'IMDB': (1, 4, 2),
             'MUTAG': (1, 3, 1), 'PROTEINS': (2, 4, 3)
         }
     }

@@ -142,6 +142,46 @@ def average_connected_components():
     avg_components = total_components / len(dataset)
     print(f"Average number of connected components: {avg_components}")
 
+def plot_distributions(args):
+    """
+    Plot the distribution of Y_pre, Y_mean, Y_std, and Y_skew with LaTeX-rendered labels.
+    """
+
+    device = torch.device('cpu')
+    datasets = load_datasets(args)
+    sns.set_theme(style="white")
+    plt.rcParams['text.usetex'] = True
+    plt.rcParams['font.family'] = 'serif'
+    plt.rcParams['font.serif'] = ['Computer Modern Roman']
+    plt.rcParams['text.latex.preamble'] = r'\usepackage{amsmath}'
+
+    plt.figure(figsize=(12, 8))
+
+    for name, dataset in datasets.items():
+        Y_pre_list, Y_ave_list, Y_std_list, Y_max_list = compute_metrics_for_dataset(dataset, name, args,
+                                                                                      device=device)
+        metrics = {
+            r"$\mathbf{Y}_{\textbf{pre}}$": Y_pre_list,
+            r"$\mathbf{Y}_{\textbf{mean}}$": Y_ave_list,
+            r"$\mathbf{Y}_{\textbf{std}}$": Y_std_list,
+            r"$\mathbf{Y}_{\textbf{max}}$": Y_max_list
+        }
+        for i, (label, values) in enumerate(metrics.items(), 1):
+            plt.subplot(2, 2, i)
+            sns.histplot(values, kde=True, bins=30)
+            plt.xlabel(label, fontsize=14)
+            plt.ylabel(r"\text{Density}", fontsize=14)
+            plt.xticks(fontsize=16)
+            plt.yticks(fontsize=16)
+
+        plt.tight_layout()
+
+        path = osp.join(osp.dirname(osp.realpath(__file__)), 'Y_distributions')
+        os.makedirs(path, exist_ok=True)
+        plt.savefig(f'{path}/{name}.pdf', dpi=300, bbox_inches='tight')
+        plt.show()
+        plt.clf()
+
 def plot_histogram(decay_rates: List[float], filename: str) -> None:
     """
     Plot and save a histogram of the decay rates.
