@@ -6,8 +6,8 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', type=str, default="MUTAG", help='Dataset name')
     parser.add_argument('--layer_type', type=str, default='R-GCN', help='Layer type')
-    parser.add_argument('--rewiring', type=str, default='digl',
-                        choices=["sdrf", "digl", "fosr", "borf"], help='Type of rewiring method')
+    parser.add_argument('--rewiring', type=str, default='gtr',
+                        choices=["sdrf", "digl", "fosr", "borf", "gtr"], help='Type of rewiring method')
 
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
     parser.add_argument('--display', action='store_true', help='Display config info')
@@ -21,6 +21,10 @@ def parse_args():
     parser.add_argument('--num_iterations', type=int, default=3, help='Number of iterations for rewiring')
     parser.add_argument('--borf_batch_add', type=int, default=30, help='BORF batch add size')
     parser.add_argument('--borf_batch_remove', type=int, default=30, help='BORF batch remove size')
+
+    # GTR
+    parser.add_argument('--num_edges', type=int, default=10, help='Number of edges to add for GTR rewiring')
+    parser.add_argument('--try_gpu', type=bool, default=False, help='Use GPU or not')
 
     args = parser.parse_args()
     return populate_defaults(args)
@@ -152,6 +156,28 @@ def populate_defaults(args):
     if args.rewiring == "borf":
         if arch in BORF_PARAMS and dataset in BORF_PARAMS[arch]:
             args.num_iterations, args.borf_batch_add, args.borf_batch_remove = BORF_PARAMS[arch][dataset]
+
+    # -------------------- GTR --------------------
+    GTR_NUM_EDGES = {
+            'GCN': {
+                'REDDIT-BINARY': 5, 'IMDB-BINARY': 5, 'MUTAG': 45,
+                'ENZYMES': 20, 'PROTEINS': 25, 'COLLAB': 5
+            },
+            'R-GCN': {
+                'REDDIT-BINARY': 20, 'IMDB-BINARY': 40, 'MUTAG': 50,
+                'ENZYMES': 40, 'PROTEINS': 10, 'COLLAB': 25
+            },
+            'GIN': {
+                'REDDIT-BINARY': 5, 'IMDB-BINARY': 15, 'MUTAG': 25,
+                'ENZYMES': 5, 'PROTEINS': 5, 'COLLAB': 25,
+            },
+            'R-GIN': {
+                'REDDIT-BINARY': 5, 'IMDB-BINARY': 20, 'MUTAG': 15,
+                'ENZYMES': 50, 'PROTEINS': 5, 'COLLAB': 30
+            }
+        }
+    if args.rewiring == "gtr":
+        args.num_edges = GTR_NUM_EDGES.get(arch, {}).get(dataset, args.num_edges)
 
     if args.display:
         print(f"\n[INFO] Final arguments after populating defaults for ({arch}, {dataset}):")

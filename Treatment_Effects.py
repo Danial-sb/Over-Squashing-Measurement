@@ -22,6 +22,7 @@ import os.path as osp
 import numpy as np
 from Measurment import decay_rate
 from preprocessing import digl, sdrf, fosr, borf
+from preprocessing.gtr import PrecomputeGTREdges, AddPrecomputedGTREdges
 
 def compute_over_squashing_metrics(decay_rates: List[float], num_nodes) -> Tuple[float, float, float, float]:
     """
@@ -74,8 +75,14 @@ def load_datasets(args):
     else:
         raise ValueError(f"Unsupported dataset: {name}")
 
-    dataset = TUDataset(root="data", name=name, transform=transform)
+    pre_transform = (
+        PrecomputeGTREdges(num_edges=args.num_edges, try_gpu=args.try_gpu)
+        if args.rewiring == "gtr" else None
+    )
+
+    dataset = TUDataset(root="data", name=name, pre_transform=pre_transform, transform=transform)
     return {args.dataset.lower(): list(dataset)}
+
 
 def apply_rewiring(rewired_dataset: List[Any], rewiring_method: str, args: Any, name: str) -> List[Any]:
     """
@@ -109,6 +116,22 @@ def apply_rewiring(rewired_dataset: List[Any], rewiring_method: str, args: Any, 
                                                    is_undirected=True,
                                                    batch_add=args.borf_batch_add, batch_remove=args.borf_batch_remove,
                                                    dataset_name=name, graph_index=idx)
+            elif rewiring_method == "gtr":
+                if hasattr(data, 'precomputed_gtr_edges'):
+                    if data.precomputed_gtr_edges.shape[1] < 2 * args.num_edges:
+                        raise ValueError("Too few GTR edges have been pre‑computed.")
+                    new_edges = data.precomputed_gtr_edges[: ,: 2*args.num_edges].to(data.edge_index.device)
+                else:
+                    raise ValueError("GTR rewiring requires precomputed edges in the dataset.")
+                if hasattr(data, 'edge_type'):
+                    etype_new = data.edge_type.max() + 1
+                    edge_type = torch.cat([data.edge_type, torch.full((new_edges.size(1),),
+                                                                      etype_new, dtype=torch.int64)]).to(data.edge_index.device)
+                else:
+                    edge_type = torch.cat([torch.zeros(data.edge_index.size(1), dtype=torch.int64),
+                                           torch.ones(new_edges.size(1), dtype=torch.int64)]).to(data.edge_index.device)
+
+                edge_index = torch.cat((data.edge_index, new_edges), dim=1)
             else:
                 log_message("No rewiring method specified. Skipping rewiring.")
                 return rewired_dataset
@@ -259,9 +282,9 @@ def automated_graph_level_evaluation():
     # Get initial args just for defaults
     base_args = get_args()
 
-    datasets = ["COLLAB"]
-    gnns = ['GCN', 'R-GCN', 'GIN', 'R-GIN']
-    rewirings = ["fosr", "sdrf", "digl", "borf"]
+    datasets = ["REDDIT-BINARY"]
+    gnns = ['GIN']
+    rewirings = ["gtr"]
 
     for dataset in datasets:
         for gnn in gnns:
@@ -280,6 +303,8 @@ def automated_graph_level_evaluation():
                     'num_iterations': base_args.num_iterations,
                     'borf_batch_add': base_args.borf_batch_add,
                     'borf_batch_remove': base_args.borf_batch_remove,
+                    'num_edges': base_args.num_edges,
+                    'try_gpu': base_args.try_gpu,
                     'seed': base_args.seed,
                     'display': True
                 })
