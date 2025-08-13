@@ -61,7 +61,7 @@ def stats(data):
 
 def plot_scatter(data):
     # Define the rewiring types and the ATE metrics we are interested in
-    rewiring_types = ["FoSR", "DIGL", "SDRF", "BORF"]
+    rewiring_types = ["FoSR", "DIGL", "SDRF", "BORF", "GTR"]
     ate_metrics = ["ATE_pre", "ATE_mean", "ATE_std", "ATE_max"]
     # ate_metrics = ["ITE_pre", "ITE_mean", "ITE_std", "ITE_max"]
 
@@ -134,7 +134,7 @@ def correlation_based_on_rewiring(data):
     # Define ATE types and rewiring techniques
     ate_types = ["ATE_pre", "ATE_mean", "ATE_std", "ATE_max"]
     # ate_types = ["ITE_pre", "ITE_mean", "ITE_std", "ITE_max"]
-    rewiring_techniques = ["FoSR", "DIGL", "SDRF", "BORF"]
+    rewiring_techniques = ["FoSR", "DIGL", "SDRF", "BORF", "GTR"]
 
     # Define significance levels
     alpha = 0.05
@@ -184,7 +184,7 @@ def correlation_based_on_rewiring(data):
             log_message("-" * 50)
 
 def visualize_correlations(alpha=0.05, m=4,
-                           save_path="correlation_graph_heatmap.pdf"):
+                           save_path="correlation_node_heatmap.pdf"):
     """
     Visualize Spearman correlation coefficients between ATE types and Gain for different rewiring techniques using a heatmap.
     Significant correlations (after Bonferroni correction) are marked with an asterisk (*).
@@ -199,19 +199,12 @@ def visualize_correlations(alpha=0.05, m=4,
     """
     # Compute Bonferroni-corrected alpha
     alpha_adj = alpha / m
-    # ate_types = ["ITE_pre", "ITE_mean", "ITE_std", "ITE_max"]
-    # latex_labels = {
-    #     "ITE_pre": r"$\textbf{Prevalence}$",
-    #     "ITE_mean": r"$\textbf{Intensity}$",
-    #     "ITE_std": r"$\textbf{Variability}$",
-    #     "ITE_max": r"$\textbf{Extremity}$"
-    # }
-    ate_types = ["ATE_pre", "ATE_mean", "ATE_std", "ATE_max"]
+    ate_types = ["ITE_pre", "ITE_mean", "ITE_std", "ITE_max"]
     latex_labels = {
-        "ATE_pre": r"$\textbf{Prevalence}$",
-        "ATE_mean": r"$\textbf{Intensity}$",
-        "ATE_std": r"$\textbf{Variability}$",
-        "ATE_max": r"$\textbf{Extremity}$",
+        "ITE_pre": r"$\textbf{Pre.}$",
+        "ITE_mean": r"$\textbf{Int.}$",
+        "ITE_std": r"$\textbf{Var.}$",
+        "ITE_max": r"$\textbf{Ext.}$"
     }
     rewiring_techniques = ["FoSR", "DIGL", "SDRF", "BORF"]
     rewiring_latex = {
@@ -220,30 +213,51 @@ def visualize_correlations(alpha=0.05, m=4,
         "SDRF": r"$\textbf{SDRF}$",
         "BORF": r"$\textbf{BORF}$"
     }
+
+# if you want generate graph stats uncomment the following lines and comment out the previous ones.
+    # ate_types = ["ATE_pre", "ATE_mean", "ATE_std", "ATE_max"]
+    # latex_labels = {
+    #     "ATE_pre": r"$\textbf{Pre.}$",
+    #     "ATE_mean": r"$\textbf{Int.}$",
+    #     "ATE_std": r"$\textbf{Var.}$",
+    #     "ATE_max": r"$\textbf{Ext.}$",
+    # }
+    # rewiring_techniques = ["FoSR", "DIGL", "SDRF", "BORF", "GTR"]
+    # rewiring_latex = {
+    #     "FoSR": r"$\textbf{FoSR}$",
+    #     "DIGL": r"$\textbf{DIGL}$",
+    #     "SDRF": r"$\textbf{SDRF}$",
+    #     "BORF": r"$\textbf{BORF}$",
+    #     "GTR": r"$\textbf{GTR}$"
+    # }
     results = {
         "ATE_pre": {
             "FoSR": {"correlation": -0.485947, "p_value": 0.057293},
             "DIGL": {"correlation": -0.143138, "p_value": 0.504615},
             "SDRF": {"correlation": +0.012413, "p_value": 0.755097},
             "BORF": {"correlation": -0.576600, "p_value": 0.175382},
+            "GTR": {"correlation": -0.408844, "p_value": 0.047293},
         },
         "ATE_mean": {
             "FoSR": {"correlation": -0.381947, "p_value": 0.884946}, #ops
             "DIGL": {"correlation": +0.044522, "p_value": 0.836344},
             "SDRF": {"correlation": -0.117493, "p_value": 0.584538},
             "BORF": {"correlation": -0.290914, "p_value": 0.484530},
+            "GTR": {"correlation": 0.164017, "p_value": 0.443779},
         },
         "ATE_std": {
             "FoSR": {"correlation": -0.340088, "p_value": 0.103943},
             "DIGL": {"correlation": +0.211977, "p_value": 0.343615},
             "SDRF": {"correlation": -0.098641, "p_value": 0.646546},
             "BORF": {"correlation": -0.181822, "p_value": 0.666524},
+            "GTR": {"correlation": 0.043346, "p_value": 0.840614},
         },
         "ATE_max": {
             "FoSR": {"correlation": -0.253813, "p_value": 0.231397},
             "DIGL": {"correlation": +0.205107, "p_value": 0.336327},
             "SDRF": {"correlation": +0.013152, "p_value": 0.951363}, #ops
             "BORF": {"correlation": -0.132540, "p_value": 0.754383},
+            "GTR": {"correlation": 0.048138, "p_value": 0.823251}
         },
     }
 
@@ -282,8 +296,8 @@ def visualize_correlations(alpha=0.05, m=4,
     # Fill matrices with data from results
     for i, ate in enumerate(ate_types):
         for j, rew in enumerate(rewiring_techniques):
-            correlation_matrix[i, j] = results[ate][rew]["correlation"]
-            p_value_matrix[i, j] = results[ate][rew]["p_value"]
+            correlation_matrix[i, j] = node_results[ate][rew]["correlation"]
+            p_value_matrix[i, j] = node_results[ate][rew]["p_value"]
 
     # Determine significance after Bonferroni correction
     significance_matrix = p_value_matrix < alpha_adj
@@ -297,6 +311,7 @@ def visualize_correlations(alpha=0.05, m=4,
 
     # Plot the heatmap
     plt.figure(figsize=(12, 10))
+    tick_vals = [-1.0, -0.5, 0.0, 0.5, 1.0]
     ax = sns.heatmap(
         correlation_matrix,
         annot=annotations,
@@ -307,30 +322,33 @@ def visualize_correlations(alpha=0.05, m=4,
         vmax=1,
         xticklabels=[rewiring_latex[rew] for rew in rewiring_techniques],
         yticklabels=[latex_labels[ate] for ate in ate_types],
-        cbar_kws={'label': r'\textbf{Spearman Correlation}'},
-        annot_kws = {"size": 32}
+        cbar_kws={
+            'ticks': tick_vals,  # <‑‑ here
+            # 'label': r'\textbf{Spearman Correlation}',  # optional label
+        },
+        annot_kws = {"size": 52}
     )
     # plt.title(
     #     rf"Correlation between ATE Types and Gain by Rewiring Technique\\Significant correlations
     #     (Bonferroni, $\alpha={alpha_adj:.4f}$) marked with *")
 
-    ax.set_xticklabels(ax.get_xticklabels(), fontsize=28, fontweight='bold')
-    ax.set_yticklabels(ax.get_yticklabels(), fontsize=26, fontweight='bold')
+    ax.set_xticklabels(ax.get_xticklabels(), fontsize=46, fontweight='bold')
+    ax.set_yticklabels(ax.get_yticklabels(), fontsize=46, fontweight='bold')
     cbar = ax.collections[0].colorbar
 
     # Update the colorbar label: bigger and bold
-    cbar.set_label(r'\textbf{Spearman Correlation}', fontsize=24, fontweight='bold')
+    # cbar.set_label(r'\textbf{Spearman Correlation}', fontsize=32, fontweight='bold')
 
     from matplotlib.ticker import FuncFormatter
 
     def format_ticks_with_sign(x, _):
-        return f"${x:+.2f}$"  # Uses LaTeX math mode
+        return f"${x:+.1f}$"  # Uses LaTeX math mode
 
     cbar.ax.yaxis.set_major_formatter(FuncFormatter(format_ticks_with_sign))
 
     # Set bold font for tick labels (LaTeX math still used)
     for label in cbar.ax.get_yticklabels():
-        label.set_fontsize(26)
+        label.set_fontsize(44)
         label.set_fontweight('bold')
 
     plt.tight_layout()
@@ -372,6 +390,13 @@ if __name__ == "__main__":
                 "ATE_std": [-5.00e-2, -2.63e-3],
                 "ATE_max": [-2.23e-1, -4.51e-2],
                 "Gain": [3.7, 1.2]
+            },
+            "GTR": {
+                "ATE_pre": [-4.29e-2, 4.79e-2, -3.87e-2, 2.83e-2],
+                "ATE_mean": [1.16e-1, 8.26e-2, 1.19e-1, 4.07e-2],
+                "ATE_std": [2.71e-2, 4.63e-3, 3.13e-2, -1.61e-2], #NS
+                "ATE_max": [9.85e-2, 4.56e-2, 1.07e-1, -3.31e-2], #NS
+                "Gain": [7.0, -0.1, 16.3, 3.0]
             }
         },
         "PROTEINS": {
@@ -403,15 +428,22 @@ if __name__ == "__main__":
                 "ATE_std": [-1.62e-2, -3.13e-2],
                 "ATE_max": [-1.09e-1, -1.54e-1],
                 "Gain": [0.4, 0.5]
+            },
+            "GTR": {
+                "ATE_pre": [-3.45e-2, 2.93e-3, -1.63e-3, 2.93e-3],
+                "ATE_mean": [-1.17e-2, 2.22e-3, -4.17e-3, 2.22e-3],
+                "ATE_std": [-4.97e-2, -3.42e-2, -4.19e-2, -3.42e-2],
+                "ATE_max": [-1.38e-1, -6.98e-2, -9.86e-2, -6.98e-2],
+                "Gain": [1.6, 2.3, 6.2, 5.1]
             }
         },
 
         "ENZYMES": {
             "FoSR": {
                 "ATE_pre": [-1.41e-3, 9.11e-3, -3.67e-2, -3.67e-2],
-                "ATE_mean": [-1.23e-2, -2.91e-3, -3.68e-2, -3.68e-2], # Not significant
+                "ATE_mean": [-1.23e-2, -2.91e-3, -3.68e-2, -3.68e-2],
                 "ATE_std": [-2.28e-2, -1.27e-2, -5.54e-2, -5.54e-2],
-                "ATE_max": [-2.76e-2, -5.52e-3, -1.38e-1, -1.38e-1], # Not significant
+                "ATE_max": [-2.76e-2, -5.52e-3, -1.38e-1, -1.38e-1],
                 "Gain": [-2.6, -4.6, 7.0, 6.4]
             },
             "DIGL": {
@@ -434,6 +466,13 @@ if __name__ == "__main__":
                 "ATE_std": [-2.91e-2, -2.93e-2],
                 "ATE_max": [-1.59e-1, -1.33e-1],
                 "Gain": [0.2, 1.7]
+            },
+            "GTR": {
+                "ATE_pre": [1.76e-2, 2.39e-2, 9.28e-3, -6.64e-3],
+                "ATE_mean": [1.15e-2, 1.28e-2, 1.03e-2, 2.04e-2],
+                "ATE_std": [-3.61e-2, -2.82e-2, -3.57e-2, -2.72e-2],
+                "ATE_max": [-9.60e-2, -6.42e-2, -9.95e-2, -6.05e-2],
+                "Gain": [-0.1, -3.2, 12.7, 11.0]
             }
         },
         "IMDB": {
@@ -455,8 +494,8 @@ if __name__ == "__main__":
             "SDRF": {
                 "ATE_pre": [-4.00e-2, -2.36e-2, -1.08e-2, -7.06e-2],
                 "ATE_mean": [-4.90e-2, -2.89e-2, -1.70e-2, -8.05e-2],
-                "ATE_std": [2.32e-2, 2.55e-2, 1.99e-2, 6.14e-3], # consider|Not significant
-                "ATE_max": [1.62e-1, 1.41e-1, 1.08e-1, 1.26e-1], # consider
+                "ATE_std": [2.32e-2, 2.55e-2, 1.99e-2, 6.14e-3], # Not significant
+                "ATE_max": [1.62e-1, 1.41e-1, 1.08e-1, 1.26e-1],
                 "Gain": [-0.3, -0.4, 3.6, 1.3]
             },
             "BORF": {
@@ -465,6 +504,13 @@ if __name__ == "__main__":
                 "ATE_std": [-3.71e-1, -3.71e-1],
                 "ATE_max": [-1.41e-1, -2.82e-1],
                 "Gain": [0.4, 1.2]
+            },
+            "GTR": {
+                "ATE_pre": [-1.98e-2, -3.29e-2, -1.98e-2, -2.13e-2],
+                "ATE_mean": [-1.98e-2, -8.95e-3, -1.98e-2, -1.21e-2],
+                "ATE_std": [-3.41e-2, -2.66e-2, -3.41e-2, -1.42e-2],
+                "ATE_max": [-5.32e-2, -4.19e-2, -5.32e-2, -8.21e-3],
+                "Gain": [0.2, 1.1, 15.0, 2.5]
             }
         },
         "COLLAB": {
@@ -488,6 +534,13 @@ if __name__ == "__main__":
                 "ATE_std": [-1.87e-3, -1.01e-2, -5.25e-3, -5.25e-3],
                 "ATE_max": [-1.52e-2, -5.44e-2, -3.91e-2, -3.91e-2],
                 "Gain": [-0.3, 0.0, 34.6, 0.9]
+            },
+            "GTR": {
+                "ATE_pre": [1.24e-2, 1.63e-2, 1.63e-2, 1.55e-2],
+                "ATE_mean": [-9.70e-4, 1.83e-3, 1.83e-3, 9.19e-4],
+                "ATE_std": [-5.51e-4, -9.33e-4, -9.33e-4, -1.09e-3],
+                "ATE_max": [4.09e-4, 2.05e-2, 2.05e-2, 2.16e-2],
+                "Gain": [-0.7, 0.3, -0.09, 1.9]
             }
         },
         "REDDIT-BINARY": {
@@ -498,7 +551,7 @@ if __name__ == "__main__":
                 "ATE_max": [1.36e-2, 2.10e-2, 1.36e-2, 5.46e-2],
                 "Gain": [2.1, 0.5, 26.7, 1.7]
             },
-            "DIGL": { # Update R-GCN
+            "DIGL": {
                 "ATE_pre": [-8.16e-2, -1.40e-1, -1.60e-2, -1.40e-1],
                 "ATE_mean": [4.11e-2, 6.60e-2, 5.68e-2, 6.60e-2],
                 "ATE_std": [5.31e-2, 7.23e-2, 5.21e-2, 7.23e-2],
@@ -511,6 +564,13 @@ if __name__ == "__main__":
                 "ATE_std": [-2.62e-4, -2.62e-4, -1.80e-3, -2.62e-4], #NS
                 "ATE_max": [1.04e-3, 1.04e-3, -4.28e-3, 1.04e-3], #NS
                 "Gain": [0.3, -0.3, -8.8, -1.1]
+            },
+            "GTR": {
+                "ATE_pre": [1.89e-2, 1.89e-2, 1.99e-2, 1.89e-2],
+                "ATE_mean": [1.23e-2, 1.23e-2, 1.83e-2, 1.23e-2],
+                "ATE_std": [8.52e-3, 8.52e-3, 1.13e-2, 8.52e-3],
+                "ATE_max": [3.96e-2, 3.96e-2, 6.00e-2, 3.96e-2],
+                "Gain": [0.7, 0.2, 30.3, 2.44]
             }
         }
     }
@@ -564,7 +624,7 @@ if __name__ == "__main__":
                 "ITE_pre": [None, None],
                 "ITE_mean": [None, None],
                 "ITE_std": [None, None],
-                "ITE_max": [None, None],  # red → None
+                "ITE_max": [None, None],
                 "Gain": [None, None],
             },
             "BORF": {
@@ -688,7 +748,7 @@ if __name__ == "__main__":
                 "Gain": [0.2, 0.3],
             },
             "BORF": {
-                "ITE_pre": [-8.20e-3, -8.18e-3], #change ?
+                "ITE_pre": [-8.20e-3, -8.18e-3],
                 "ITE_mean": [-3.38e-2, -3.30e-2],
                 "ITE_std": [-2.10e-2, -2.06e-2],
                 "ITE_max": [-9.96e-2, -9.75e-2],
